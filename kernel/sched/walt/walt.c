@@ -15,7 +15,6 @@
 #include <linux/cpumask.h>
 #include <linux/arch_topology.h>
 #include <linux/cpu.h>
-#include <linux/of.h>
 
 #include <trace/hooks/sched.h>
 #include <trace/hooks/cpufreq.h>
@@ -83,7 +82,6 @@ unsigned int __read_mostly sched_init_task_load_windows;
 unsigned int __read_mostly sched_load_granule;
 
 unsigned int enable_pipeline_boost;
-extern unsigned int sysctl_sched_pipeline_skip_prime;
 
 u64 walt_sched_clock(void)
 {
@@ -419,18 +417,17 @@ update_window_start(struct rq *rq, u64 wallclock, int event)
 	bool full_window;
 
 	if (wallclock < wrq->latest_clock) {
-		WALT_BUG(WALT_BUG_WALT, NULL, "on CPU%d; wallclock=%llu(0x%llx) is lesser than latest_clock=%llu(0x%llx)",
+		printk_deferred("WALT-BUG CPU%d; wallclock=%llu(0x%llx) is lesser than latest_clock=%llu(0x%llx)",
 				rq->cpu, wallclock, wallclock, wrq->latest_clock,
 				wrq->latest_clock);
-		wallclock = wrq->latest_clock;
+		WALT_PANIC(1);
 	}
 	delta = wallclock - wrq->window_start;
 	if (delta < 0) {
-		WALT_BUG(WALT_BUG_WALT, NULL, " on CPU%d; wallclock=%llu(0x%llx) is lesser than window_start=%llu(0x%llx)",
+		printk_deferred("WALT-BUG CPU%d; wallclock=%llu(0x%llx) is lesser than window_start=%llu(0x%llx)",
 				rq->cpu, wallclock, wallclock,
 				wrq->window_start, wrq->window_start);
-		delta = 0;
-		wallclock = max(wallclock, wrq->window_start);
+		WALT_PANIC(1);
 	}
 	wrq->latest_clock = wallclock;
 	if (delta < sched_ravg_window)
@@ -718,6 +715,7 @@ cpu_util_freq_walt(int cpu, struct walt_cpu_load *walt_load, unsigned int *reaso
 		walt_load->nl = ADJUSTED_SHARED_RAIL_UTIL(max_nl_other, wl_prime.nl, mpct);
 		walt_load->pl = ADJUSTED_SHARED_RAIL_UTIL(max_pl_other, wl_prime.pl, mpct);
 	}
+
 	if (!cpumask_test_cpu(cpu, &asym_cap_sibling_cpus))
 		goto finish;
 
@@ -736,7 +734,7 @@ cpu_util_freq_walt(int cpu, struct walt_cpu_load *walt_load, unsigned int *reaso
 	walt_load->nl = max(walt_load->nl, max_nl_other);
 	walt_load->pl = max(walt_load->pl, max_pl_other);
 finish:
-		return (util >= capacity) ? capacity : util;
+	return (util >= capacity) ? capacity : util;
 }
 
 /*
@@ -2314,10 +2312,10 @@ update_task_rq_cpu_cycles(struct task_struct *p, struct rq *rq, int event,
 			time_delta = wallclock - wts->mark_start;
 
 		if ((s64)time_delta < 0) {
-			WALT_BUG(WALT_BUG_WALT, p, "WALT-BUG pid=%u CPU%d wallclock=%llu(0x%llx) < mark_start=%llu(0x%llx) event=%d irqtime=%llu",
+			printk_deferred("WALT-BUG pid=%u CPU%d wallclock=%llu(0x%llx) < mark_start=%llu(0x%llx) event=%d irqtime=%llu",
 					 p->pid, rq->cpu, wallclock, wallclock,
 					 wts->mark_start, wts->mark_start, event, irqtime);
-			time_delta = 1;
+			WALT_PANIC((s64)time_delta < 0);
 		}
 
 		wrq->task_exec_scale = DIV64_U64_ROUNDUP(cycles_delta *
@@ -2358,12 +2356,6 @@ static void walt_update_task_ravg(struct task_struct *p, struct rq *rq, int even
 
 	if (!wrq->window_start || wts->mark_start == wallclock)
 		return;
-
-	if (unlikely(!raw_spin_is_locked(&rq->__lock)))
-		WALT_BUG(WALT_BUG_WALT, p, "on CPU%d: %s task %s(%d) unlocked access for cpu=%d suspended=%d last_clk=%llu cur_clk=%llu stack[%pS <== %pS <== %pS]\n",
-				raw_smp_processor_id(), __func__, p->comm, p->pid, rq->cpu,
-				walt_clock_suspended, sched_clock_last, sched_clock(),
-				(void *)CALLER_ADDR0, (void *)CALLER_ADDR1, (void *)CALLER_ADDR2);
 
 	walt_lockdep_assert_rq(rq, p);
 
@@ -3377,8 +3369,6 @@ static void walt_update_tg_pointer(struct cgroup_subsys_state *css)
 		walt_init_topapp_tg(css_tg(css));
 	else if (!strcmp(css->cgroup->kn->name, "foreground"))
 		walt_init_foreground_tg(css_tg(css));
-	else if (!strcmp(css->cgroup->kn->name, "foreground-boost"))
-		walt_init_foreground_tg(css_tg(css));
 	else
 		walt_init_tg(css_tg(css));
 }
@@ -3813,8 +3803,6 @@ static inline void pipeline_set_boost(bool boost, int flag)
 	else
 		enable_pipeline_boost |= (1 << flag);
 
-	trace_clock_set_rate("ppb-on", enable_pipeline_boost, raw_smp_processor_id());
-
 	if (isolation_boost && !enable_pipeline_boost) {
 		isolation_boost = false;
 
@@ -3874,7 +3862,7 @@ bool find_heaviest_topapp(u64 window_start)
 
 	/* lazy enabling disabling until 100mS for colocation or heavy_nr change */
 	grp = lookup_related_thread_group(DEFAULT_CGROUP_COLOC_ID);
-	if (!grp || !sched_heavy_nr) {
+	if (!grp || !grp->skip_min || !sched_heavy_nr) {
 		if (have_heavy_list) {
 			raw_spin_lock_irqsave(&heavy_lock, flags);
 			for (i = 0; i < WALT_NR_CPUS; i++) {
@@ -4062,7 +4050,7 @@ static inline bool is_prime_worthy(struct walt_task_struct *wts)
 {
 	struct task_struct *p;
 
-	if (wts == NULL || sysctl_sched_pipeline_skip_prime)
+	if (wts == NULL)
 		return false;
 
 	p = wts_to_ts(wts);
@@ -4120,8 +4108,7 @@ void rearrange_heavy(u64 window_start, bool force)
 	find_prime_and_max_tasks(heavy_wts, &prime_wts, &other_wts);
 
 	/* swap prime for have_heavy_list >= 3 */
-	if (!sysctl_sched_pipeline_skip_prime)
-		swap_pipeline_with_prime_locked(prime_wts, other_wts);
+	swap_pipeline_with_prime_locked(prime_wts, other_wts);
 
 	raw_spin_unlock_irqrestore(&heavy_lock, flags);
 }
@@ -4223,8 +4210,7 @@ void rearrange_pipeline_preferred_cpus(u64 window_start)
 	}
 
 	/* swap prime for nr_piprline >= 3 */
-	if (!sysctl_sched_pipeline_skip_prime)
-		swap_pipeline_with_prime_locked(prime_wts, other_wts);
+	swap_pipeline_with_prime_locked(prime_wts, other_wts);
 
 	if (trace_sched_pipeline_tasks_enabled()) {
 		for (i = 0; i < WALT_NR_CPUS; i++) {
@@ -4282,11 +4268,6 @@ static inline void __walt_irq_work_locked(bool is_migration, bool is_asym_migrat
 			if (rq->curr) {
 				/* only update ravg for locked cpus */
 				if (cpumask_intersects(lock_cpus, &cluster->cpus)) {
-					if (unlikely(!raw_spin_is_locked(&rq->__lock)))
-						WALT_BUG(WALT_BUG_WALT, NULL, "WALT-BUG %s unlocked cpu=%d is_migration=%d is_asym_migration=%d is_shared_rail_migration=%d lock_cpus=%*pbl suspended=%d last_clk=%llu cur_clk=%llu stack[%pS <= %pS <= %pS]\n",
-								__func__, rq->cpu, is_migration, is_asym_migration,	is_shared_rail_migration,
-								cpumask_pr_args(lock_cpus), walt_clock_suspended, sched_clock_last, sched_clock(),
-								(void *)CALLER_ADDR0, (void *)CALLER_ADDR1, (void *)CALLER_ADDR2);
 					walt_update_task_ravg(rq->curr, rq,
 							      TASK_UPDATE, wc, 0);
 					account_load_subtractions(rq);
@@ -4763,15 +4744,9 @@ static void walt_sched_init_rq(struct rq *rq)
 void sched_window_nr_ticks_change(void)
 {
 	unsigned long flags;
-	unsigned int ravg_window_nr_ticks = sysctl_sched_ravg_window_nr_ticks;
 
 	spin_lock_irqsave(&sched_ravg_window_lock, flags);
-
-	if (sysctl_sched_ravg_window_nr_ticks_user != 0)
-		ravg_window_nr_ticks = min(ravg_window_nr_ticks,
-			sysctl_sched_ravg_window_nr_ticks_user);
-
-	new_sched_ravg_window = mult_frac(ravg_window_nr_ticks,
+	new_sched_ravg_window = mult_frac(sysctl_sched_ravg_window_nr_ticks,
 						NSEC_PER_SEC, HZ);
 	spin_unlock_irqrestore(&sched_ravg_window_lock, flags);
 }
@@ -5416,47 +5391,6 @@ static void walt_init_tg_pointers(void)
 	rcu_read_unlock();
 }
 
-#if IS_ENABLED(CONFIG_RQ_STAT_SHOW)
-static int rq_stat_show(struct seq_file *m, void *data)
-{
-	int cpu;
-	char buf[64];
-	int len = 0;
-	int g_gp_sum = 0;
-	int s_t_sum = 0;
-	//8650 specific cluster id
-	int gold_id = 1;
-	int prime_id = 3;
-
-	for_each_possible_cpu(cpu) {
-		struct rq *rq = cpu_rq(cpu);
-		struct walt_rq *wrq = &per_cpu(walt_rq, cpu);
-		if (wrq->cluster->id == gold_id || wrq->cluster->id == prime_id)
-			g_gp_sum += rq->nr_running;
-		else
-			s_t_sum += rq->nr_running;
-	}
-	len += snprintf(buf + len, 64 - len, "%u ", s_t_sum);
-	len += snprintf(buf + len, 64 - len, "%u ", g_gp_sum);
-	seq_printf(m, "%s\n", buf);
-
-	return 0;
-}
-
-static int rq_stat_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, rq_stat_show, NULL);
-}
-
-static const struct proc_ops proc_rq_stat_op = {
-	.proc_open = rq_stat_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
-};
-#endif
-
-
 static void walt_init(struct work_struct *work)
 {
 	struct ctl_table_header *hdr;
@@ -5483,7 +5417,6 @@ static void walt_init(struct work_struct *work)
 	walt_rt_init();
 	walt_cfs_init();
 	walt_halt_init();
-	walt_mvp_lock_ordering_init();
 
 	wait_for_completion_interruptible(&tick_sched_clock_completion);
 
@@ -5519,11 +5452,6 @@ static void walt_init(struct work_struct *work)
 	walt_boost_init();
 	waltgov_register();
 
-#if IS_ENABLED(CONFIG_RQ_STAT_SHOW)
-	if (!proc_create("rq_stat", 0444, NULL, &proc_rq_stat_op))
-		pr_err("Failed to register proc interface 'rq_stat'\n");
-#endif
-
 	i = match_string(sched_feat_names, __SCHED_FEAT_NR, "TTWU_QUEUE");
 	if (i >= 0) {
 		static_key_disable(&sched_feat_keys[i]);
@@ -5539,24 +5467,6 @@ static void android_vh_update_topology_flags_workfn(void *unused, void *unused2)
 	schedule_work(&walt_init_work);
 }
 
-static void walt_devicetree_init(void)
-{
-	struct device_node *np;
-	int ret;
-
-	np = of_find_node_by_name(NULL, "sched_walt");
-	if (!np) {
-		pr_err("Failed to find node of sched_walt\n");
-		return;
-	}
-	
-	ret = of_property_read_u32(np, "panic_on_walt_bug", &sysctl_panic_on_walt_bug);
-	if (ret < 0) {
-		pr_err("Failed to read panic_on_walt_bug property\n");
-		return;
-	}
-}
-
 #define WALT_VENDOR_DATA_SIZE_TEST(wstruct, kstruct)		\
 	BUILD_BUG_ON(sizeof(wstruct) > (sizeof(u64) *		\
 		ARRAY_SIZE(((kstruct *)0)->android_vendor_data1)))
@@ -5566,8 +5476,6 @@ static int walt_module_init(void)
 	/* compile time checks for vendor data size */
 	WALT_VENDOR_DATA_SIZE_TEST(struct walt_task_struct, struct task_struct);
 	WALT_VENDOR_DATA_SIZE_TEST(struct walt_task_group, struct task_group);
-
-	walt_devicetree_init();
 
 	register_trace_android_vh_update_topology_flags_workfn(
 			android_vh_update_topology_flags_workfn, NULL);
@@ -5583,15 +5491,4 @@ MODULE_LICENSE("GPL v2");
 
 #if IS_ENABLED(CONFIG_SCHED_WALT_DEBUG)
 MODULE_SOFTDEP("pre: sched-walt-debug");
-#endif
-
-#if IS_ENABLED(CONFIG_SEC_QC_SUMMARY)
-#include <linux/samsung/debug/qcom/sec_qc_summary.h>
-
-void sec_qc_summary_set_sched_walt_info(struct sec_qc_summary_data_apss *apss)
-{
-	apss->aplpm.num_clusters = num_sched_clusters;
-	apss->aplpm.p_cluster = virt_to_phys(sched_cluster);
-}
-EXPORT_SYMBOL(sec_qc_summary_set_sched_walt_info);
 #endif

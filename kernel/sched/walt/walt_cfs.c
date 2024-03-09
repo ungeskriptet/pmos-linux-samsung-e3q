@@ -331,8 +331,6 @@ static void walt_find_best_target(struct sched_domain *sd,
 	cpumask_t visit_cpus;
 	struct walt_task_struct *wts = (struct walt_task_struct *) p->android_vendor_data1;
 	int packing_cpu;
-	long most_spare_wake_cap_target_clusters = LONG_MIN;
-	int most_spare_cap_target_cluster_cpu = -1;
 
 	/* Find start CPU based on boost value */
 	start_cpu = fbt_env->start_cpu;
@@ -403,18 +401,6 @@ static void walt_find_best_target(struct sched_domain *sd,
 			if (spare_wake_cap > most_spare_wake_cap) {
 				most_spare_wake_cap = spare_wake_cap;
 				most_spare_cap_cpu = i;
-			}
-
-			/*
-			 * Keep track of least loaded cpu which can be used as a
-			 * fallback placement core for BIG rtg task in case all
-			 * the cores are busy,  this is to avoid prev_cpu
-			 * fallback mechanism.
-			 */
-			if ((cluster <= end_index) &&
-				(spare_wake_cap > most_spare_wake_cap_target_clusters)) {
-				most_spare_wake_cap_target_clusters = spare_wake_cap;
-				most_spare_cap_target_cluster_cpu = i;
 			}
 
 			/*
@@ -546,9 +532,6 @@ static void walt_find_best_target(struct sched_domain *sd,
 	if (unlikely(cpumask_empty(candidates))) {
 		if (most_spare_cap_cpu != -1)
 			cpumask_set_cpu(most_spare_cap_cpu, candidates);
-		else if (most_spare_cap_target_cluster_cpu != -1 && (order_index > 0) &&
-				fbt_env->is_rtg)
-			cpumask_set_cpu(most_spare_cap_target_cluster_cpu, candidates);
 		else if (cpu_active(prev_cpu)
 			 && (cpu_rq(prev_cpu)->nr_running < DIRE_STRAITS_PREV_NR_LIMIT))
 			cpumask_set_cpu(prev_cpu, candidates);
@@ -560,7 +543,7 @@ out:
 	trace_sched_find_best_target(p, min_task_util, start_cpu, cpumask_bits(candidates)[0],
 			     most_spare_cap_cpu, order_index, end_index,
 			     fbt_env->skip_cpu, task_on_rq_queued(p), least_nr_cpu,
-			     cpu_rq_runnable_cnt, most_spare_cap_target_cluster_cpu);
+			     cpu_rq_runnable_cnt);
 }
 
 static inline unsigned long
@@ -880,15 +863,17 @@ int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 
 	wts = (struct walt_task_struct *) p->android_vendor_data1;
 	pipeline_cpu = wts->pipeline_cpu;
-	if (walt_pipeline_low_latency_task(p) &&
+	if ((wts->low_latency & WALT_LOW_LATENCY_MASK) &&
 			(pipeline_cpu != -1) &&
+			walt_task_skip_min_cpu(p) &&
 			cpumask_test_cpu(pipeline_cpu, p->cpus_ptr) &&
 			cpu_active(pipeline_cpu) &&
-			!cpu_halted(pipeline_cpu) &&
-			!walt_pipeline_low_latency_task(cpu_rq(pipeline_cpu)->curr)) {
+			!cpu_halted(pipeline_cpu)) {
+		if (!walt_pipeline_low_latency_task(cpu_rq(pipeline_cpu)->curr)) {
 			best_energy_cpu = pipeline_cpu;
 			fbt_env.fastpath = PIPELINE_FASTPATH;
 			goto out;
+		}
 	}
 
 	walt_get_indicies(p, &order_index, &end_index, task_boost, uclamp_boost,

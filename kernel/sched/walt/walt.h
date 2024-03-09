@@ -260,7 +260,6 @@ extern unsigned int sysctl_ed_boost_pct;
 extern unsigned int sysctl_em_inflate_pct;
 extern unsigned int sysctl_em_inflate_thres;
 extern unsigned int sysctl_sched_heavy_nr;
-extern int pipeline_nr;
 
 extern int cpufreq_walt_set_adaptive_freq(unsigned int cpu, unsigned int adaptive_low_freq,
 					  unsigned int adaptive_high_freq);
@@ -285,8 +284,6 @@ extern int sched_dynamic_tp_handler(struct ctl_table *table, int write,
 extern struct list_head cluster_head;
 #define for_each_sched_cluster(cluster) \
 	list_for_each_entry_rcu(cluster, &cluster_head, list)
-
-extern bool sbt_ongoing;
 
 static inline struct walt_sched_cluster *cpu_cluster(int cpu)
 {
@@ -331,7 +328,6 @@ extern unsigned int __read_mostly sysctl_sched_group_downmigrate_pct;
 extern unsigned int __read_mostly sysctl_sched_group_upmigrate_pct;
 extern unsigned int __read_mostly sysctl_sched_window_stats_policy;
 extern unsigned int sysctl_sched_ravg_window_nr_ticks;
-extern unsigned int sysctl_sched_ravg_window_nr_ticks_user;
 extern unsigned int sysctl_sched_walt_rotate_big_tasks;
 extern unsigned int sysctl_sched_task_unfilter_period;
 extern unsigned int sysctl_walt_low_latency_task_threshold; /* disabled by default */
@@ -547,7 +543,6 @@ static inline bool is_storage_boost(void)
 	return sched_boost_type == STORAGE_BOOST;
 }
 
-#define SCHED_BOOST_EXCEPT_TASK_PRIO		(130)
 static inline bool task_sched_boost(struct task_struct *p)
 {
 	struct cgroup_subsys_state *css;
@@ -568,8 +563,6 @@ static inline bool task_sched_boost(struct task_struct *p)
 	tg = container_of(css, struct task_group, css);
 	wtg = (struct walt_task_group *) tg->android_vendor_data1;
 	sched_boost_enabled = wtg->sched_boost_enable[sched_boost_type];
-	if (!wtg->colocate && p->prio >= SCHED_BOOST_EXCEPT_TASK_PRIO)
-		sched_boost_enabled = false;
 	rcu_read_unlock();
 
 	return sched_boost_enabled;
@@ -806,7 +799,7 @@ extern struct cpumask __cpu_partial_halt_mask;
 static bool check_for_higher_capacity(int cpu1, int cpu2)
 {
 	if (cpu_partial_halted(cpu1) && is_min_possible_cluster_cpu(cpu2))
-		return false;
+		return true;
 
 	if (is_min_possible_cluster_cpu(cpu1) && cpu_partial_halted(cpu2))
 		return false;
@@ -872,7 +865,6 @@ extern void sched_update_hyst_times(void);
 extern void walt_rt_init(void);
 extern void walt_cfs_init(void);
 extern void walt_halt_init(void);
-extern void walt_mvp_lock_ordering_init(void);
 extern void walt_fixup_init(void);
 extern int walt_find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 					int sync, int sibling_count_hint);

@@ -57,7 +57,6 @@ unsigned int __read_mostly sysctl_sched_group_downmigrate_pct;
 unsigned int __read_mostly sysctl_sched_group_upmigrate_pct;
 unsigned int __read_mostly sysctl_sched_window_stats_policy;
 unsigned int sysctl_sched_ravg_window_nr_ticks;
-unsigned int sysctl_sched_ravg_window_nr_ticks_user;
 unsigned int sysctl_sched_walt_rotate_big_tasks;
 unsigned int sysctl_sched_task_unfilter_period;
 unsigned int sysctl_walt_low_latency_task_threshold; /* disabled by default */
@@ -69,7 +68,7 @@ unsigned int sysctl_sched_many_wakeup_threshold = WALT_MANY_WAKEUP_DEFAULT;
 const int sched_user_hint_max = 1000;
 unsigned int sysctl_walt_rtg_cfs_boost_prio = 99; /* disabled by default */
 unsigned int sysctl_sched_sync_hint_enable = 1;
-unsigned int sysctl_panic_on_walt_bug;
+unsigned int sysctl_panic_on_walt_bug = walt_debug_initial_values();
 unsigned int sysctl_sched_suppress_region2;
 unsigned int sysctl_sched_skip_sp_newly_idle_lb = 1;
 unsigned int sysctl_sched_hyst_min_coloc_ns = 80000000;
@@ -90,8 +89,7 @@ unsigned int sysctl_sched_sbt_delay_windows;
 unsigned int high_perf_cluster_freq_cap[MAX_CLUSTERS];
 unsigned int sysctl_sched_pipeline_cpus;
 unsigned int fmax_cap[MAX_FREQ_CAP][MAX_CLUSTERS];
-unsigned int sysctl_sched_pipeline_skip_prime;
-bool sbt_ongoing;
+
 /* range is [1 .. INT_MAX] */
 static int sysctl_task_read_pid = 1;
 
@@ -162,6 +160,7 @@ static int walt_proc_sbt_pause_handler(struct ctl_table *table,
 	unsigned int old_value;
 	unsigned long bitmask;
 	const unsigned long *bitmaskp = &bitmask;
+	static bool written_once;
 	static DEFINE_MUTEX(mutex);
 
 	mutex_lock(&mutex);
@@ -171,25 +170,22 @@ static int walt_proc_sbt_pause_handler(struct ctl_table *table,
 	if (ret || !write || (old_value == sysctl_sched_sbt_pause_cpus))
 		goto unlock;
 
+	if (written_once) {
+		sysctl_sched_sbt_pause_cpus = old_value;
+		goto unlock;
+	}
+
 	bitmask = (unsigned long)sysctl_sched_sbt_pause_cpus;
 	bitmap_copy(sysctl_bitmap, bitmaskp, WALT_NR_CPUS);
+	cpumask_copy(&cpus_for_sbt_pause, to_cpumask(sysctl_bitmap));
 
-	if (!sbt_ongoing)
-		cpumask_copy(&cpus_for_sbt_pause, to_cpumask(sysctl_bitmap));
-	else
-		pr_warn("sbt core control is on-going, ignore change\n");
-
+	written_once = true;
 unlock:
 	mutex_unlock(&mutex);
 	return ret;
 }
 
-/*
- * pipeline cpus are non-prime cpus chosen to handle pipeline tasks, e.g. golds
- * Notice That
- * - This can be updated only if sysctl_sched_heavy_nr == 0 && pipeline_nr == 0
- * - CPU7 is not allowed to set sched_pipeline_cpus
- */
+/* pipeline cpus are non-prime cpus chosen to handle pipeline tasks, e.g. golds */
 static int walt_proc_pipeline_cpus_handler(struct ctl_table *table,
 					   int write, void __user *buffer, size_t *lenp,
 					   loff_t *ppos)
@@ -198,12 +194,8 @@ static int walt_proc_pipeline_cpus_handler(struct ctl_table *table,
 	unsigned int old_value;
 	unsigned long bitmask;
 	const unsigned long *bitmaskp = &bitmask;
+	static bool written_once;
 	static DEFINE_MUTEX(mutex);
-	int avoid_cpu = cpumask_last(&sched_cluster[num_sched_clusters - 1]->cpus);
-
-	/* do not allow if pipeline is setup */
-	if (write && (sysctl_sched_heavy_nr || pipeline_nr))
-		return -EPERM;
 
 	mutex_lock(&mutex);
 
@@ -212,34 +204,18 @@ static int walt_proc_pipeline_cpus_handler(struct ctl_table *table,
 	if (ret || !write || (old_value == sysctl_sched_pipeline_cpus))
 		goto unlock;
 
+	if (written_once) {
+		sysctl_sched_pipeline_cpus = old_value;
+		goto unlock;
+	}
+
 	bitmask = (unsigned long)sysctl_sched_pipeline_cpus;
 	bitmap_copy(sysctl_bitmap, bitmaskp, WALT_NR_CPUS);
 	cpumask_copy(&cpus_for_pipeline, to_cpumask(sysctl_bitmap));
 
-	/* do not allow avoid_cpu to be present in sysctl nor the mask */
-	cpumask_clear_cpu(avoid_cpu, &cpus_for_pipeline);
-	sysctl_sched_pipeline_cpus &= ~(1 << avoid_cpu);
-
+	written_once = true;
 unlock:
 	mutex_unlock(&mutex);
-	return ret;
-}
-
-/* pipeline cpus are non-prime cpus chosen to handle pipeline tasks, e.g. golds */
-static int walt_proc_heavy_nr_handler(struct ctl_table *table,
-				      int write, void __user *buffer, size_t *lenp,
-				      loff_t *ppos)
-{
-	int ret = 0;
-	static DEFINE_MUTEX(mutex);
-
-	if (write && !sysctl_sched_pipeline_cpus)
-		return -EPERM;
-
-	mutex_lock(&mutex);
-	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
-	mutex_unlock(&mutex);
-
 	return ret;
 }
 
@@ -273,43 +249,6 @@ static int sched_ravg_window_handler(struct ctl_table *table,
 	}
 
 	sysctl_sched_ravg_window_nr_ticks = val;
-	sched_window_nr_ticks_change();
-
-unlock:
-	mutex_unlock(&mutex);
-	return ret;
-}
-
-static int sched_ravg_window_handler_user(struct ctl_table *table,
-				int write, void __user *buffer, size_t *lenp,
-				loff_t *ppos)
-{
-	int ret = -EPERM;
-	static DEFINE_MUTEX(mutex);
-	int val;
-
-	struct ctl_table tmp = {
-		.data	= &val,
-		.maxlen	= sizeof(val),
-		.mode	= table->mode,
-	};
-
-	mutex_lock(&mutex);
-
-	if (write && HZ != 250)
-		goto unlock;
-
-	val = sysctl_sched_ravg_window_nr_ticks_user;
-	ret = proc_dointvec(&tmp, write, buffer, lenp, ppos);
-	if (ret || !write || (val == sysctl_sched_ravg_window_nr_ticks_user))
-		goto unlock;
-
-	if (val != 0 && val != 2 && val != 3 && val != 4 && val != 5 && val != 8) {
-		ret = -EINVAL;
-		goto unlock;
-	}
-
-	sysctl_sched_ravg_window_nr_ticks_user = val;
 	sched_window_nr_ticks_change();
 
 unlock:
@@ -477,11 +416,6 @@ static int sched_task_handler(struct ctl_table *table, int write,
 			wts->low_latency &= ~WALT_LOW_LATENCY_PROCFS;
 		break;
 	case PIPELINE:
-		/* deny write operation while empty pipeline cpus */
-		if (!sysctl_sched_pipeline_cpus) {
-			ret = -EPERM;
-			goto put_task;
-		}
 		rq = task_rq_lock(task, &rf);
 		if (READ_ONCE(task->__state) == TASK_DEAD) {
 			ret = -EINVAL;
@@ -766,7 +700,7 @@ int sched_idle_enough_handler(struct ctl_table *table, int write,
 	mutex_lock(&idle_enough_mutex);
 
 	ret = proc_douintvec_minmax(table, write, buffer, lenp, ppos);
-	if (ret || !write)
+	if (ret)
 		goto unlock_mutex;
 
 	/* update all per-cluster entries to match what was written */
@@ -788,7 +722,7 @@ int sched_idle_enough_clust_handler(struct ctl_table *table, int write,
 	mutex_lock(&idle_enough_mutex);
 
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
-	if (ret || !write)
+	if (ret)
 		goto unlock_mutex;
 
 	/* update the single-entry to match the first cluster updated here */
@@ -811,7 +745,7 @@ int sched_cluster_util_thres_pct_handler(struct ctl_table *table, int write,
 	mutex_lock(&util_thres_mutex);
 
 	ret = proc_douintvec_minmax(table, write, buffer, lenp, ppos);
-	if (ret || !write)
+	if (ret)
 		goto unlock_mutex;
 
 	/* update all per-cluster entries to match what was written */
@@ -833,7 +767,7 @@ int sched_cluster_util_thres_pct_clust_handler(struct ctl_table *table, int writ
 	mutex_lock(&util_thres_mutex);
 
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
-	if (ret || !write)
+	if (ret)
 		goto unlock_mutex;
 
 	/* update the single-entry to match the first cluster updated here */
@@ -1079,13 +1013,6 @@ struct ctl_table walt_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_ravg_window_handler,
-	},
-	{
-		.procname	= "sched_ravg_window_nr_ticks_user",
-		.data		= &sysctl_sched_ravg_window_nr_ticks_user,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_ravg_window_handler_user,
 	},
 	{
 		.procname	= "sched_upmigrate",
@@ -1374,7 +1301,7 @@ struct ctl_table walt_table[] = {
 		.data		= &sysctl_sched_heavy_nr,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
-		.proc_handler	= walt_proc_heavy_nr_handler,
+		.proc_handler	= proc_douintvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= &walt_max_cpus,
 	},
@@ -1428,15 +1355,6 @@ struct ctl_table walt_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_fmax_cap_handler,
 	},
-	{
-		.procname = "sched_pipeline_skip_prime",
-		.data = &sysctl_sched_pipeline_skip_prime,
-		.maxlen = sizeof(unsigned int),
-		.mode = 0644,
-		.proc_handler = proc_douintvec_minmax,
-		.extra1 = SYSCTL_ZERO,
-		.extra2 = SYSCTL_INT_MAX,
-	},
 	{ }
 };
 
@@ -1469,7 +1387,6 @@ void walt_tunables(void)
 	sysctl_sched_window_stats_policy = WINDOW_STATS_MAX_RECENT_AVG;
 
 	sysctl_sched_ravg_window_nr_ticks = (HZ / NR_WINDOWS_PER_SEC);
-	sysctl_sched_ravg_window_nr_ticks_user = 0;
 
 	sched_load_granule = DEFAULT_SCHED_RAVG_WINDOW / NUM_LOAD_INDICES;
 

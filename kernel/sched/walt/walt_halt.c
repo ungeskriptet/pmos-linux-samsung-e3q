@@ -5,7 +5,6 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/sched/isolation.h>
-#include <trace/events/power.h>
 #include <trace/hooks/sched.h>
 #include <walt.h>
 #include "trace.h"
@@ -371,7 +370,7 @@ static int start_cpus(struct cpumask *cpus, enum pause_type type)
 	restrict_cpus_and_freq(cpus);
 
 	trace_halt_cpus(cpus, start_time, 0, 0);
-	trace_clock_set_rate("sync_state", is_state1() ? 0 : 1, raw_smp_processor_id());
+
 	return 0;
 }
 
@@ -432,7 +431,7 @@ static int walt_halt_cpus(struct cpumask *cpus, enum pause_client client, enum p
 		update_clients(&requested_cpus, true, client, type);
 unlock:
 	raw_spin_unlock_irqrestore(&halt_lock, flags);
-	trace_clock_set_rate("sync_state", is_state1() ? 0 : 1, raw_smp_processor_id());
+
 	return ret;
 }
 
