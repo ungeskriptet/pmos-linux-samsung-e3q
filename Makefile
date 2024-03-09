@@ -287,6 +287,13 @@ endif
 objtree		:= .
 VPATH		:= $(srctree)
 
+-include $(srctree)/scripts/sec_env.mk
+ifneq ($(TARGET_BUILD_VARIANT),user)
+SEC_LOCALVERSION	:= $(CL_SYNC)-$(TARGET_BUILD_VARIANT)-ab$(BUILD_NUMBER)
+else
+SEC_LOCALVERSION	:= $(CL_SYNC)-ab$(BUILD_NUMBER)
+endif
+
 export building_out_of_srctree srctree objtree VPATH
 
 # To make sure we do not include .config for any of the *config targets
@@ -1379,7 +1386,7 @@ $(sort $(KBUILD_LDS) $(KBUILD_VMLINUX_OBJS) $(KBUILD_VMLINUX_LIBS)): . ;
 
 filechk_kernel.release = \
 	echo "$(KERNELVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion \
-		$(srctree) $(BRANCH) $(KMI_GENERATION))"
+		$(srctree) $(GOOGLE_BRANCH) $(KMI_GENERATION) $(SEC_LOCALVERSION))"
 
 # Store (new) KERNELRELEASE string in include/config/kernel.release
 include/config/kernel.release: FORCE
@@ -1672,7 +1679,8 @@ __modinst_pre:
 		rm -f $(MODLIB)/build ; \
 		ln -s $(CURDIR) $(MODLIB)/build ; \
 	fi
-	@sed 's:^:kernel/:' modules.order > $(MODLIB)/modules.order
+	@sed 's:^:kernel/:' modules.order > $(MODLIB)/modules.order.tmp
+	@perl $(srctree)/scripts/sec_reorder.pl $(MODLIB)/modules.order.tmp > $(MODLIB)/modules.order
 	@cp -f $(mixed-build-prefix)modules.builtin $(MODLIB)/
 	@cp -f $(or $(mixed-build-prefix),$(objtree)/)modules.builtin.modinfo $(MODLIB)/
 
@@ -1712,6 +1720,9 @@ PHONY += archclean vmlinuxclean
 vmlinuxclean:
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/link-vmlinux.sh clean
 	$(Q)$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) clean)
+
+legoclean:
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/lego/kclean.sh $(srctree)/.legofile
 
 clean: archclean vmlinuxclean resolve_btfids_clean
 
@@ -2215,7 +2226,7 @@ checkstack:
 
 kernelrelease:
 	@echo "$(KERNELVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion \
-		$(srctree) $(BRANCH) $(KMI_GENERATION))"
+		$(srctree) $(GOOGLE_BRANCH) $(KMI_GENERATION) $(SEC_LOCALVERSION))"
 
 kernelversion:
 	@echo $(KERNELVERSION)

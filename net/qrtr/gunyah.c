@@ -441,6 +441,11 @@ static void qrtr_gunyah_read_frag(struct qrtr_gunyah_dev *qdev)
 static void qrtr_gunyah_read(struct qrtr_gunyah_dev *qdev)
 {
 	unsigned long flags;
+	
+	if(!qdev) {
+        	pr_err("Debug: Invalid data.");
+        	return;
+        }
 
 	spin_lock_irqsave(&qdev->dbl_lock, flags);
 	wake_up_all(&qdev->tx_avail_notify);

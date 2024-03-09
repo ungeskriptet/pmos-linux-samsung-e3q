@@ -450,6 +450,7 @@ static int mem_buf_lend_internal(struct dma_buf *dmabuf,
 {
 	struct mem_buf_vmperm *vmperm;
 	struct sg_table *sgt;
+	enum dma_data_direction invalidation_dir = DMA_TO_DEVICE;
 	int ret;
 
 	if (!arg->nr_acl_entries || !arg->vmids || !arg->perms)
@@ -508,7 +509,9 @@ static int mem_buf_lend_internal(struct dma_buf *dmabuf,
 	 * for backwards compatibility with ion we will always do CMO.
 	 */
 	dma_map_sgtable(mem_buf_dev, vmperm->sgt, DMA_TO_DEVICE, 0);
-	dma_unmap_sgtable(mem_buf_dev, vmperm->sgt, DMA_TO_DEVICE, 0);
+	if (arg->nr_acl_entries == 1 && arg->vmids[0] == VMID_CP_BITSTREAM)
+		invalidation_dir = DMA_FROM_DEVICE;
+	dma_unmap_sgtable(mem_buf_dev, vmperm->sgt, invalidation_dir, 0);
 
 	ret = mem_buf_vmperm_resize(vmperm, arg->nr_acl_entries);
 	if (ret)

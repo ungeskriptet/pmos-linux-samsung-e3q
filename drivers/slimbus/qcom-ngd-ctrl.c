@@ -464,6 +464,7 @@ static int qcom_slim_qmi_send_power_request(struct qcom_slim_ngd_ctrl *ctrl,
 		mutex_unlock(&ctrl->qmi_handle_lock);
 		return -EINVAL;
 	}
+
 	rc = qmi_txn_init(ctrl->qmi.handle, &txn,
 				slimbus_power_resp_msg_v01_ei, &resp);
 

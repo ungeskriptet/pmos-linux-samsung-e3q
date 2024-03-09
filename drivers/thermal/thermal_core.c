@@ -29,6 +29,9 @@
 #include "thermal_core.h"
 #include "thermal_hwmon.h"
 
+/* SEC_PM: cooling device state */
+static struct delayed_work cdev_print_work;
+
 static DEFINE_IDA(thermal_tz_ida);
 static DEFINE_IDA(thermal_cdev_ida);
 
@@ -320,9 +323,17 @@ void thermal_zone_device_critical(struct thermal_zone_device *tz)
 	 * Its a must for forced_emergency_poweroff_work to be scheduled.
 	 */
 	int poweroff_delay_ms = CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS;
+	struct thermal_zone_device *pos;
+
+	/* SEC_PM */
+	mutex_lock(&thermal_list_lock);
+	list_for_each_entry(pos, &thermal_tz_list, node)
+		pr_err("%s: %d\n", pos->type, pos->temperature);
+	mutex_unlock(&thermal_list_lock);
 
 	dev_emerg(&tz->device, "%s: critical temperature reached, "
 		  "shutting down\n", tz->type);
+	panic("Thermal Critical : %s, %d", tz->type, tz->temperature);
 
 	hw_protection_shutdown("Temperature too high", poweroff_delay_ms);
 }
@@ -455,6 +466,93 @@ int thermal_zone_device_is_enabled(struct thermal_zone_device *tz)
 
 	return tz->mode == THERMAL_DEVICE_ENABLED;
 }
+
+/* SEC_PM */
+#define MAX_CDEV			50
+#define MAX_CDEV_NAME	30
+#define MAX_BUF_LEN		512
+
+static bool is_prev;
+static char pc_buf[MAX_BUF_LEN];
+static char *pc_buf_ptr;
+
+static int cdev_count;
+static struct prev_cdev {
+	struct thermal_cooling_device *cdev;
+	unsigned long target;
+
+	u64 last_entered_at;
+	u64 last_exited_at;
+	u64 accumulated;
+
+	bool is_start;
+} pc[MAX_CDEV];
+
+void print_updated_cdev(struct thermal_cooling_device *cdev, unsigned long target)
+{
+	int i, temp_cdev_count = cdev_count;
+
+	pc_buf_ptr = pc_buf;
+
+	if (target > 0) {
+		if (cdev_count == 0) {
+			pc[0].cdev = cdev;
+			pc[0].target = target;
+			pc[0].accumulated = 0;
+			pc[0].is_start = true;
+			pc[0].last_entered_at = ktime_to_ms(ktime_get());
+			pc[0].last_exited_at = 0;
+
+			cdev_count++;
+			is_prev = true;
+
+			return;
+		}
+
+		for (i = 0; i < temp_cdev_count; i++) {
+			if (!strcmp(cdev->type, pc[i].cdev->type)) {
+				if (pc[i].is_start == false) {
+					pc[i].is_start = true;
+					pc[i].last_entered_at = ktime_to_ms(ktime_get());
+					pc[i].last_exited_at = 0;
+				}
+
+				/* update to largest target */
+				if (pc[i].target < target)
+					pc[i].target = target;
+
+				return;
+			}
+		}
+
+		if (i == temp_cdev_count) {
+			pc[i].cdev = cdev;
+			pc[i].target = target;
+			pc[i].accumulated = 0;
+			pc[i].is_start = true;
+			pc[i].last_entered_at = ktime_to_ms(ktime_get());
+			pc[i].last_exited_at = 0;
+
+			cdev_count++;
+			is_prev = true;
+		}
+	} else if (target == 0) {
+		for (i = 0; i < temp_cdev_count; i++) {
+			if (!strcmp(cdev->type, pc[i].cdev->type)) {
+				if (pc[i].is_start == true) {
+					pc[i].last_exited_at = ktime_to_ms(ktime_get());
+					pc[i].accumulated +=
+							(pc[i].last_exited_at - pc[i].last_entered_at);
+
+					pc[i].is_start = false;
+				}
+
+				return;
+			}
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(print_updated_cdev);
 
 void thermal_zone_device_update(struct thermal_zone_device *tz,
 				enum thermal_notify_event event)
@@ -914,6 +1012,7 @@ __thermal_cooling_device_register(struct device_node *np,
 	ret = device_register(&cdev->device);
 	if (ret)
 		goto out_kfree_type;
+	pr_debug("register cooling_device%d-%s\n", cdev->id, cdev->type);
 
 	/* Add 'this' new cdev to the global cdev list */
 	mutex_lock(&thermal_list_lock);
@@ -1448,6 +1547,56 @@ exit:
 }
 EXPORT_SYMBOL_GPL(thermal_zone_get_zone_by_name);
 
+/* SEC_PM */
+#define BUF_SIZE	SZ_1K
+static void __ref cdev_print(struct work_struct *work)
+{
+	struct thermal_cooling_device *cdev;
+	unsigned long cur_state = 0;
+	int added = 0, ret = 0, i;
+	char buffer[BUF_SIZE] = { 0, };
+
+	mutex_lock(&thermal_list_lock);
+	list_for_each_entry(cdev, &thermal_cdev_list, node) {
+		if (cdev->ops->get_cur_state)
+			cdev->ops->get_cur_state(cdev, &cur_state);
+
+		if (cur_state) {
+			ret = snprintf(buffer + added, sizeof(buffer) - added,
+					   "[%s:%ld]", cdev->type, cur_state);
+			added += ret;
+
+			if (added >= BUF_SIZE)
+				break;
+		}
+	}
+	mutex_unlock(&thermal_list_lock);
+
+	if (is_prev) {
+		for (i = 0; i < cdev_count; i++) {
+			pc_buf_ptr += sprintf(pc_buf_ptr, "[%s:%ld, %lld.%03llds]",
+				pc[i].cdev->type, pc[i].target,
+				pc[i].accumulated / MSEC_PER_SEC, pc[i].accumulated % MSEC_PER_SEC);
+
+			pc[i].accumulated = 0;
+			pc[i].is_start = false;
+			pc[i].last_entered_at = 0;
+			pc[i].last_exited_at = 0;
+			pc[i].target = 0;
+		}
+
+		pr_info("thermal: prev_cdev%s\n", pc_buf);
+
+		pc_buf_ptr = pc_buf;
+		cdev_count = 0;
+		is_prev = false;
+	}
+
+	pr_info("thermal: cdev%s\n", buffer);
+
+	schedule_delayed_work(&cdev_print_work, HZ * 5);
+}
+
 static int thermal_pm_notify(struct notifier_block *nb,
 			     unsigned long mode, void *_unused)
 {
@@ -1457,6 +1606,9 @@ static int thermal_pm_notify(struct notifier_block *nb,
 	case PM_HIBERNATION_PREPARE:
 	case PM_RESTORE_PREPARE:
 	case PM_SUSPEND_PREPARE:
+		/* SEC_PM */
+		cancel_delayed_work(&cdev_print_work);
+
 		atomic_set(&in_suspend, 1);
 		break;
 	case PM_POST_HIBERNATION:
@@ -1464,10 +1616,18 @@ static int thermal_pm_notify(struct notifier_block *nb,
 	case PM_POST_SUSPEND:
 		atomic_set(&in_suspend, 0);
 		list_for_each_entry(tz, &thermal_tz_list, node) {
+			/* SEC_PM: to optimize wakeup time */
+			if (tz->polling_delay_jiffies == 0)
+				continue;
+
 			thermal_zone_device_init(tz);
 			thermal_zone_device_update(tz,
 						   THERMAL_EVENT_UNSPECIFIED);
 		}
+
+		/* SEC_PM */
+		schedule_delayed_work(&cdev_print_work, 0);
+
 		break;
 	default:
 		break;
@@ -1499,6 +1659,10 @@ static int __init thermal_init(void)
 	if (result)
 		pr_warn("Thermal: Can not register suspend notifier, return %d\n",
 			result);
+
+	/* SEC_PM */
+	INIT_DELAYED_WORK(&cdev_print_work, cdev_print);
+	schedule_delayed_work(&cdev_print_work, 0);
 
 	return 0;
 

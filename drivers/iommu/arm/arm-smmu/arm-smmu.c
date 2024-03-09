@@ -893,6 +893,8 @@ static irqreturn_t arm_smmu_context_fault_retry(struct arm_smmu_domain *smmu_dom
 }
 #endif
 
+static __always_inline void __sec_debug_bug_on_enosys(struct arm_smmu_domain *smmu_domain, int idx);
+
 static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 {
 	u32 fsr;
@@ -949,7 +951,11 @@ static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 			print_fault_regs(smmu_domain, smmu, idx);
 			arm_smmu_verify_fault(smmu_domain, smmu, idx);
 		}
+#if IS_ENABLED(CONFIG_SEC_DEBUG)
+		__sec_debug_bug_on_enosys(smmu_domain, idx);
+#else
 		BUG_ON(!smmu_domain->fault_model.non_fatal);
+#endif
 	}
 	if (ret != -EBUSY) {
 		arm_smmu_cb_write(smmu, idx, ARM_SMMU_CB_FSR, fsr);
@@ -3923,3 +3929,70 @@ MODULE_DESCRIPTION("IOMMU API for ARM architected SMMU implementations");
 MODULE_AUTHOR("Will Deacon <will@kernel.org>");
 MODULE_ALIAS("platform:arm-smmu");
 MODULE_LICENSE("GPL v2");
+
+static const char *__arm_smmu_get_devname(struct device *dev)
+{
+	const char *token;
+	const char *delim = ":,.";
+	const char *devname;
+
+	token = dev_name(dev);
+	if (!token)
+		return "No Name";
+
+	pr_info("smmu client name - %s\n", token);
+
+	if (dev_is_pci(dev))
+		return token;
+
+	while (true) {
+		devname = token;
+		token = strpbrk(token, delim);
+		if (!token)
+			break;
+		token++;	/* skip delimiter */
+	}
+
+	return devname;
+}
+
+static const char *arm_smmu_get_devname(const struct arm_smmu_domain *smmu_domain,
+		u32 sid)
+{
+	struct iommu_fwspec *fwspec = NULL;
+	struct device* dev = NULL;
+	unsigned int i;
+
+	if (smmu_domain->dev)
+		fwspec = dev_iommu_fwspec_get(smmu_domain->dev);
+
+	for (i = 0; fwspec && i < fwspec->num_ids; i++) {
+		if ((fwspec->ids[i] & smmu_domain->smmu->streamid_mask) == sid) {
+			dev = smmu_domain->dev;
+			break;
+		}
+	}
+
+	if (!fwspec || !dev)
+		return "No Device";
+
+	return __arm_smmu_get_devname(dev);
+}
+
+static __always_inline void __sec_debug_bug_on_enosys(
+		struct arm_smmu_domain *smmu_domain, int idx)
+{
+	bool cond = !smmu_domain->fault_model.non_fatal;
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	u32 cbfrsynra;
+	u32 sid;
+
+	if (likely(!cond))
+		return;
+
+	cbfrsynra = arm_smmu_gr1_read(smmu, ARM_SMMU_GR1_CBFRSYNRA(idx));
+	sid = cbfrsynra & CBFRSYNRA_SID_MASK;
+
+	panic("%s SMMU Fault - SID=0x%x", arm_smmu_get_devname(smmu_domain, sid), sid);
+
+}

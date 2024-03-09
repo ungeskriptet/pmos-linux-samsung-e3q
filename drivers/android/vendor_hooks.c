@@ -60,6 +60,8 @@
 #include <trace/hooks/traps.h>
 #include <trace/hooks/thermal.h>
 #include <trace/hooks/audio_usboffload.h>
+#include <trace/hooks/usb.h>
+#include <trace/hooks/xhci.h>
 #include <trace/hooks/typec.h>
 #include <trace/hooks/user.h>
 #include <trace/hooks/signal.h>
@@ -239,6 +241,10 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_gic_resume);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_gic_v3_suspend);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_audio_usb_offload_connect);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_audio_usb_offload_disconnect);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_usb_dev_suspend);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_usb_dev_resume);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_xhci_suspend);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_xhci_resume);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_kswapd_per_node);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_typec_tcpci_override_toggling);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_typec_tcpci_get_vbus);

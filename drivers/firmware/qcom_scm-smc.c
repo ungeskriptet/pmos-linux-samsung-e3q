@@ -114,7 +114,7 @@ int scm_get_wq_ctx(u32 *wq_ctx, u32 *flags, u32 *more_pending)
 }
 
 static int scm_smc_do_quirk(struct device *dev, struct arm_smccc_args *smc,
-		    struct arm_smccc_res *res, const bool multi_smc_call)
+		    struct arm_smccc_res *res)
 {
 	struct completion *wq = NULL;
 	struct qcom_scm *qscm;
@@ -141,16 +141,12 @@ static int scm_smc_do_quirk(struct device *dev, struct arm_smccc_args *smc,
 			}
 
 			if (res->a0 == QCOM_SCM_WAITQ_SLEEP) {
-				if (multi_smc_call)
-					mutex_unlock(&qcom_scm_lock);
 				wait_for_completion(wq);
-				if (multi_smc_call)
-					mutex_lock(&qcom_scm_lock);
 				fill_wq_resume_args(smc, smc_call_ctx);
-				wq = NULL;
 				continue;
 			} else {
 				fill_wq_wake_ack_args(smc, smc_call_ctx);
+				scm_waitq_flag_handler(wq, flags);
 				continue;
 			}
 		} else if ((long)res->a0 < 0) {
@@ -159,13 +155,9 @@ static int scm_smc_do_quirk(struct device *dev, struct arm_smccc_args *smc,
 			break;
 		} else {
 			/*
-			 * Success.
-			 * wq will be set only if a prior WAKE happened.
-			 * Its value will be the one from the prior WAKE.
+			 * Success!
 			 */
-			if (wq)
-				scm_waitq_flag_handler(wq, flags);
-			break;
+			return 0;
 		}
 	} while (IS_WAITQ_SLEEP_OR_WAKE(res));
 
@@ -186,9 +178,13 @@ static int __scm_smc_do(struct device *dev, struct arm_smccc_args *smc,
 	}
 
 	do {
-		mutex_lock(&qcom_scm_lock);
-		ret = scm_smc_do_quirk(dev, smc, res, multi_smc_call);
-		mutex_unlock(&qcom_scm_lock);
+		if (!multi_smc_call)
+			mutex_lock(&qcom_scm_lock);
+		down(&qcom_scm_sem_lock);
+		ret = scm_smc_do_quirk(dev, smc, res);
+		up(&qcom_scm_sem_lock);
+		if (!multi_smc_call)
+			mutex_unlock(&qcom_scm_lock);
 		if (ret)
 			return ret;
 

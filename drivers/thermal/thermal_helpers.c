@@ -221,6 +221,9 @@ void __thermal_cdev_update(struct thermal_cooling_device *cdev)
 
 	trace_cdev_update(cdev, target);
 	dev_dbg(&cdev->device, "set to state %lu\n", target);
+
+	/* SEC_PM */
+	print_updated_cdev(cdev, target);
 }
 
 /**

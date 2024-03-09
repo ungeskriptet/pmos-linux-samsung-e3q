@@ -66,11 +66,28 @@ struct page *dynamic_page_pool_remove(struct dynamic_page_pool *pool, bool high)
 	return page;
 }
 
+#define HUGEPAGE_ORDER HPAGE_PMD_ORDER
+#define GB_TO_PAGES(x) ((x) << (30 - PAGE_SHIFT))
+
 void dynamic_page_pool_free(struct dynamic_page_pool *pool, struct page *page)
 {
+#ifdef CONFIG_HUGEPAGE_POOL
+	static bool did_check = false;
+	static bool is_huge_dram = false;
+
+	if (unlikely(!did_check)) {
+		is_huge_dram = totalram_pages() > GB_TO_PAGES(6) ? true : false;
+		did_check = true;
+	}
+#endif
 	BUG_ON(pool->order != compound_order(page));
 
-	dynamic_page_pool_add(pool, page);
+#ifdef CONFIG_HUGEPAGE_POOL
+	if (is_huge_dram && pool->order == HUGEPAGE_ORDER && !pool->prerelease_callback)
+		__free_pages(page, HUGEPAGE_ORDER);
+	else
+#endif
+		dynamic_page_pool_add(pool, page);
 }
 
 int dynamic_page_pool_total(struct dynamic_page_pool *pool, bool high)

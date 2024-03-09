@@ -63,8 +63,8 @@ enum ufs_qcom_ber_mode {
 
 /* default value of auto suspend is 3 seconds */
 #define UFS_QCOM_AUTO_SUSPEND_DELAY	3000
-#define UFS_QCOM_CLK_GATING_DELAY_MS_PWR_SAVE	10
-#define UFS_QCOM_CLK_GATING_DELAY_MS_PERF	50
+#define UFS_QCOM_CLK_GATING_DELAY_MS_PWR_SAVE	4
+#define UFS_QCOM_CLK_GATING_DELAY_MS_PERF	12
 
 /* QCOM UFS host controller vendor specific registers */
 enum {
@@ -254,6 +254,12 @@ enum ufs_qcom_phy_init_type {
  * Enable this quirk to give an additional TX_HS_SYNC_LENGTH.
  */
 #define UFS_DEVICE_QUIRK_PA_TX_HSG1_SYNC_LENGTH (1 << 16)
+
+/*
+ * Some ufs device vendors need a different Deemphasis setting.
+ * Enable this quirk to tune TX Deemphasis parameters.
+ */
+#define UFS_DEVICE_QUIRK_PA_TX_DEEMPHASIS_TUNING (1 << 17)
 
 static inline void
 ufs_qcom_get_controller_revision(struct ufs_hba *hba,
@@ -616,6 +622,8 @@ struct ufs_qcom_host {
 	bool bypass_pbl_rst_wa;
 	atomic_t cqhp_update_pending;
 	struct notifier_block ufs_qcom_panic_nb;
+
+	bool skip_flush;
 };
 
 static inline u32

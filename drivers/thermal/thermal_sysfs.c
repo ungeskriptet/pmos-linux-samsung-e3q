@@ -628,8 +628,12 @@ cur_state_store(struct device *dev, struct device_attribute *attr,
 	mutex_lock(&cdev->lock);
 
 	result = cdev->ops->set_cur_state(cdev, state);
-	if (!result)
+	if (!result) {
 		thermal_cooling_device_stats_update(cdev, state);
+
+		/* SEC_PM */
+		print_updated_cdev(cdev, state);
+	}
 
 	mutex_unlock(&cdev->lock);
 	return result ? result : count;

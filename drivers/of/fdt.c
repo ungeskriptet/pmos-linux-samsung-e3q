@@ -429,6 +429,7 @@ void *__unflatten_device_tree(const void *blob,
 	pr_debug(" <- unflatten_device_tree()\n");
 	return mem;
 }
+EXPORT_SYMBOL_GPL(__unflatten_device_tree);
 
 static void *kernel_tree_alloc(u64 size, u64 align)
 {

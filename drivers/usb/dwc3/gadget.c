@@ -2538,7 +2538,7 @@ static int dwc3_gadget_soft_disconnect(struct dwc3 *dwc)
 
 	spin_lock_irqsave(&dwc->lock, flags);
 	dwc->connected = false;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	/*
 	 * Attempt to end pending SETUP status phase, and not wait for the
 	 * function to do so.
@@ -3848,7 +3848,7 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	dwc3_gadget_dctl_write_safe(dwc, reg);
 
 	dwc->connected = false;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	dwc3_disconnect_gadget(dwc);
 
 	dwc->gadget->speed = USB_SPEED_UNKNOWN;
@@ -3872,7 +3872,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	 * transfers here, and avoid allowing of request queuing.
 	 */
 	dwc->connected = false;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	/*
 	 * WORKAROUND: DWC3 revisions <1.88a have an issue which
 	 * would cause a missing Disconnect Event if there's a
@@ -3921,7 +3921,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	 */
 	dwc3_stop_active_transfers(dwc);
 	dwc->connected = true;
-
+	dev_info(dwc->dev, "%s dwc->connected: %d\n", __func__, dwc->connected);
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
 	reg &= ~DWC3_DCTL_TSTCTRL_MASK;
 	dwc3_gadget_dctl_write_safe(dwc, reg);
@@ -3932,6 +3932,7 @@ static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
 	reg = dwc3_readl(dwc->regs, DWC3_DCFG);
 	reg &= ~(DWC3_DCFG_DEVADDR_MASK);
 	dwc3_writel(dwc->regs, DWC3_DCFG, reg);
+	dwc->link_state = DWC3_LINK_STATE_RESET;
 }
 
 static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
@@ -4093,6 +4094,7 @@ static void dwc3_gadget_wakeup_interrupt(struct dwc3 *dwc)
 		dwc->gadget_driver->resume(dwc->gadget);
 		spin_lock(&dwc->lock);
 	}
+	dwc->link_state = DWC3_LINK_STATE_RESUME;
 }
 
 static void dwc3_gadget_linksts_change_interrupt(struct dwc3 *dwc,
@@ -4235,9 +4237,11 @@ static void dwc3_gadget_interrupt(struct dwc3 *dwc,
 			 * Ignore suspend event until the gadget enters into
 			 * USB_STATE_CONFIGURED state.
 			 */
-			if (dwc->gadget->state >= USB_STATE_CONFIGURED)
+//			if (dwc->gadget->state >= USB_STATE_CONFIGURED)
 				dwc3_gadget_suspend_interrupt(dwc,
 						event->event_info);
+//			else
+//				usb_gadget_vbus_draw(dwc->gadget, 2);
 		}
 		break;
 	case DWC3_DEVICE_EVENT_SOF:

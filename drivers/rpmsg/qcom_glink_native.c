@@ -48,7 +48,7 @@ do {									     \
 	}								     \
 } while (0)
 
-#if IS_ENABLED(CONFIG_RPMSG_QCOM_GLINK_DEBUG)
+#if 1//IS_ENABLED(CONFIG_RPMSG_QCOM_GLINK_DEBUG)
 #define GLINK_BUG(ctxt, x, ...)						\
 do {									\
 	ipc_log_string(ctxt, "[%s]: ASSERT at line %d: "x,		\
@@ -778,7 +778,8 @@ int qcom_glink_rx_done(struct rpmsg_endpoint *ept, void *data)
 		if (intent->data == data) {
 			list_del(&intent->node);
 			spin_unlock_irqrestore(&channel->intent_lock, flags);
-
+			if (intent->reuse == false)
+				idr_remove(&channel->liids, intent->id);
 			qcom_glink_send_rx_done(glink, channel, intent, true);
 			return 0;
 		}

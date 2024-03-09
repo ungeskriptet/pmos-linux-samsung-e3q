@@ -547,6 +547,11 @@ static ssize_t show_assist_cpu_misfit_mask(const struct cluster_data *state, cha
 	return ret;
 }
 
+static ssize_t show_sync_state(const struct cluster_data *state, char *buf)
+{
+ return scnprintf(buf, PAGE_SIZE, "%u\n", !is_state1());
+}
+
 struct core_ctl_attr {
 	struct attribute	attr;
 	ssize_t			(*show)(const struct cluster_data *cd, char *c);
@@ -578,6 +583,7 @@ core_ctl_attr_rw(nrrun_cpu_mask);
 core_ctl_attr_rw(nrrun_cpu_misfit_mask);
 core_ctl_attr_rw(assist_cpu_mask);
 core_ctl_attr_rw(assist_cpu_misfit_mask);
+core_ctl_attr_ro(sync_state);
 
 static struct attribute *default_attrs[] = {
 	&min_cpus.attr,
@@ -596,6 +602,7 @@ static struct attribute *default_attrs[] = {
 	&nrrun_cpu_misfit_mask.attr,
 	&assist_cpu_mask.attr,
 	&assist_cpu_misfit_mask.attr,
+	&sync_state.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(default);
@@ -1325,33 +1332,43 @@ void sbt_ctl_check(void)
 {
 	static bool prev_is_sbt;
 	static int prev_is_sbt_windows;
+	static cpumask_t last_pause_cpus;
 	bool now_is_sbt = is_sbt(prev_is_sbt, prev_is_sbt_windows);
 	cpumask_t local_cpus;
+	sbt_ongoing = true;
 
 	/* if there are cpus to adjust */
-	if (cpumask_weight(&cpus_for_sbt_pause) != 0) {
+	if (cpumask_weight(&cpus_for_sbt_pause) != 0 ||
+			cpumask_weight(&last_pause_cpus) != 0) {
 
 		if (prev_is_sbt == now_is_sbt) {
 			if (prev_is_sbt_windows < sysctl_sched_sbt_delay_windows)
 				prev_is_sbt_windows = sysctl_sched_sbt_delay_windows;
+			sbt_ongoing = false;
 			return;
 		}
 
-		if (now_is_sbt && prev_is_sbt_windows-- > 0)
+		if (now_is_sbt && prev_is_sbt_windows-- > 0) {
+			sbt_ongoing = false;
 			return;
+		}
 
 		cpumask_copy(&local_cpus, &cpus_for_sbt_pause);
 
-		if (!prev_is_sbt && now_is_sbt)
-			/*sbt entry*/
+		if (!prev_is_sbt && now_is_sbt) {
+			cpumask_copy(&last_pause_cpus, &local_cpus);
+			/* sbt entry */
 			walt_pause_cpus(&local_cpus, PAUSE_SBT);
-		else if (prev_is_sbt && !now_is_sbt)
+		} else if (prev_is_sbt && !now_is_sbt) {
 			/* sbt exit */
-			walt_resume_cpus(&local_cpus, PAUSE_SBT);
+			walt_resume_cpus(&last_pause_cpus, PAUSE_SBT);
+			cpumask_clear(&last_pause_cpus);
+		}
 
 		prev_is_sbt_windows = sysctl_sched_sbt_delay_windows;
 		prev_is_sbt = now_is_sbt;
 	}
+	sbt_ongoing = false;
 }
 
 /*
@@ -1849,6 +1866,7 @@ int core_ctl_init(void)
 	}
 
 	initialized = true;
+	sbt_ongoing = false;
 
 	return 0;
 }

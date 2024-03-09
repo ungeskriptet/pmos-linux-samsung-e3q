@@ -158,6 +158,9 @@ of_thermal_get_trip_points(struct thermal_zone_device *tz)
 }
 #endif
 
+/* SEC_PM */
+void print_updated_cdev(struct thermal_cooling_device *cdev, unsigned long target);
+
 int thermal_zone_device_is_enabled(struct thermal_zone_device *tz);
 
 #endif /* __THERMAL_CORE_H__ */

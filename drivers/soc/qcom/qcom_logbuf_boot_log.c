@@ -72,6 +72,8 @@ static int boot_log_init(void)
 	 */
 	smp_mb();
 
+	return 0;
+
 out:
 	return ret;
 }

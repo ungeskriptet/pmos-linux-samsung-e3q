@@ -1,6 +1,16 @@
 load(":target_variants.bzl", "la_variants")
 load(":msm_kernel_la.bzl", "define_msm_la")
 load(":image_opts.bzl", "boot_image_opts")
+load(":sec_bsp.bzl", "sec_bsp")
+load(":sec_block.bzl", "sec_block")
+load(":sec_display.bzl", "sec_display")
+load(":sec_audio.bzl", "sec_audio")
+load(":sec_usb.bzl", "sec_usb")
+load(":sec_sensor.bzl", "sec_sensor")
+load(":sec_power.bzl", "sec_power")
+load(":kunit.bzl", "kunit_module_list")
+load(":lego.bzl", "lego_module_list")
+load(":sec_hdm.bzl", "hdm_module_list")
 
 target_name = "pineapple"
 
@@ -64,9 +74,9 @@ def define_pineapple():
         "drivers/i3c/master/i3c-master-msm-geni.ko",
         "drivers/iio/adc/qcom-spmi-adc5-gen3.ko",
         "drivers/iio/adc/qcom-vadc-common.ko",
-        "drivers/iio/adc/qti-glink-adc.ko",
+        # "drivers/iio/adc/qti-glink-adc.ko",
         "drivers/input/misc/pm8941-pwrkey.ko",
-        "drivers/input/misc/qcom-hv-haptics.ko",
+        # "drivers/input/misc/qcom-hv-haptics.ko",
         "drivers/interconnect/icc-test.ko",
         "drivers/interconnect/qcom/icc-bcm-voter.ko",
         "drivers/interconnect/qcom/icc-debug.ko",
@@ -109,7 +119,7 @@ def define_pineapple():
         "drivers/power/reset/qcom-pon.ko",
         "drivers/power/reset/qcom-reboot-reason.ko",
         "drivers/power/reset/reboot-mode.ko",
-        "drivers/power/supply/qti_battery_charger.ko",
+        # "drivers/power/supply/qti_battery_charger.ko",
         "drivers/pwm/pwm-qti-lpg.ko",
         "drivers/regulator/debug-regulator.ko",
         "drivers/regulator/proxy-consumer.ko",
@@ -133,10 +143,10 @@ def define_pineapple():
         "drivers/slimbus/slim-qcom-ngd-ctrl.ko",
         "drivers/slimbus/slimbus.ko",
         "drivers/soc/qcom/adsp_sleepmon.ko",
-        "drivers/soc/qcom/altmode-glink.ko",
+        # "drivers/soc/qcom/altmode-glink.ko",
         "drivers/soc/qcom/boot_stats.ko",
         "drivers/soc/qcom/cdsprm.ko",
-        "drivers/soc/qcom/charger-ulog-glink.ko",
+        # "drivers/soc/qcom/charger-ulog-glink.ko",
         "drivers/soc/qcom/cmd-db.ko",
         "drivers/soc/qcom/core_hang_detect.ko",
         "drivers/soc/qcom/cpucp_log.ko",
@@ -167,7 +177,6 @@ def define_pineapple():
         "drivers/soc/qcom/llcc_perfmon.ko",
         "drivers/soc/qcom/mdt_loader.ko",
         "drivers/soc/qcom/mem-hooks.ko",
-        "drivers/soc/qcom/mem-offline.ko",
         "drivers/soc/qcom/mem_buf/mem_buf.ko",
         "drivers/soc/qcom/mem_buf/mem_buf_dev.ko",
         "drivers/soc/qcom/mem_buf/mem_buf_msgq.ko",
@@ -180,9 +189,9 @@ def define_pineapple():
         "drivers/soc/qcom/panel_event_notifier.ko",
         "drivers/soc/qcom/pcie-pdc.ko",
         "drivers/soc/qcom/pdr_interface.ko",
-        "drivers/soc/qcom/pmic-glink-debug.ko",
+        # "drivers/soc/qcom/pmic-glink-debug.ko",
         "drivers/soc/qcom/pmic-pon-log.ko",
-        "drivers/soc/qcom/pmic_glink.ko",
+        # "drivers/soc/qcom/pmic_glink.ko",
         "drivers/soc/qcom/qcom_aoss.ko",
         "drivers/soc/qcom/qcom_cpu_vendor_hooks.ko",
         "drivers/soc/qcom/qcom_cpucp.ko",
@@ -197,7 +206,7 @@ def define_pineapple():
         "drivers/soc/qcom/qfprom-sys.ko",
         "drivers/soc/qcom/qmi_helpers.ko",
         "drivers/soc/qcom/qsee_ipc_irq_bridge.ko",
-        "drivers/soc/qcom/qti_battery_debug.ko",
+        # "drivers/soc/qcom/qti_battery_debug.ko",
         "drivers/soc/qcom/secure_buffer.ko",
         "drivers/soc/qcom/smem.ko",
         "drivers/soc/qcom/smp2p.ko",
@@ -246,8 +255,8 @@ def define_pineapple():
         "drivers/usb/redriver/nb7vpq904m.ko",
         "drivers/usb/redriver/redriver.ko",
         "drivers/usb/repeater/repeater.ko",
-        "drivers/usb/repeater/repeater-qti-pmic-eusb2.ko",
-        "drivers/usb/typec/ucsi/ucsi_glink.ko",
+        #"drivers/usb/repeater/repeater-qti-pmic-eusb2.ko",
+        #"drivers/usb/typec/ucsi/ucsi_glink.ko",
         "drivers/virt/gunyah/gh_ctrl.ko",
         "drivers/virt/gunyah/gh_dbl.ko",
         "drivers/virt/gunyah/gh_irq_lend.ko",
@@ -277,8 +286,6 @@ def define_pineapple():
         "drivers/cpuidle/governors/qcom_simple_lpm.ko",
         "drivers/hwtracing/coresight/coresight-etm4x.ko",
         "drivers/misc/lkdtm/lkdtm.ko",
-        "drivers/usb/misc/ehset.ko",
-        "drivers/usb/misc/lvstest.ko",
         "kernel/locking/locktorture.ko",
         "kernel/rcu/rcutorture.ko",
         "kernel/torture.ko",
@@ -304,6 +311,41 @@ def define_pineapple():
             board_kernel_cmdline_extras += ["nosoftlockup"]
             kernel_vendor_cmdline_extras += ["nosoftlockup"]
             board_bootconfig_extras += ["androidboot.console=0"]
+
+        mod_list = mod_list + sec_bsp(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_block(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_display(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_audio(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + hdm_module_list(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_usb(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_sensor(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + sec_power(
+            target = target_name,
+            variant = variant
+        )
+        mod_list = mod_list + kunit_module_list 
+        mod_list = mod_list + lego_module_list
 
         define_msm_la(
             msm_target = target_name,

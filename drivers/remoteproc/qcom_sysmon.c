@@ -431,6 +431,9 @@ static int ssctl_send_event(struct qcom_sysmon *sysmon,
 	req.transaction_id = sysmon->transaction_id;
 	ssctl_event = is_tid_valid ? SSCTL_SUBSYS_EVENT_REQ : SSCTL_SUBSYS_EVENT_WITH_TID_REQ;
 
+	if (!strcmp(dev_name(sysmon->dev), "3000000.remoteproc-adsp")) {
+		pr_err("[%s] sending %d", __func__, req.event);
+	}
 	ret = qmi_send_request(&sysmon->qmi, &sysmon->ssctl, &txn,
 			       ssctl_event, 40, ssctl_subsys_event_with_tid_req_ei, &req);
 	if (ret < 0) {
@@ -442,6 +445,9 @@ static int ssctl_send_event(struct qcom_sysmon *sysmon,
 	ret = qmi_txn_wait(&txn, 5 * HZ);
 	if (ret < 0) {
 		dev_err(sysmon->dev, "failed receiving QMI response\n");
+		if (!strcmp(dev_name(sysmon->dev), "3000000.remoteproc-adsp")) {
+			pr_err("[%s] sending %d", __func__, req.event);
+		}
 		return ret;
 	}
 

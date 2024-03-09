@@ -10,13 +10,12 @@ import os
 import re
 import sys
 import subprocess
+import stat
 
 HOST_TARGETS = ["dtc"]
 DEFAULT_SKIP_LIST = ["abi"]
 MSM_EXTENSIONS = "build/msm_kernel_extensions.bzl"
-ABL_EXTENSIONS = "build/abl_extensions.bzl"
 DEFAULT_MSM_EXTENSIONS_SRC = "../msm-kernel/msm_kernel_extensions.bzl"
-DEFAULT_ABL_EXTENSIONS_SRC = "../bootable/bootloader/edk2/abl_extensions.bzl"
 DEFAULT_OUT_DIR = "{workspace}/out/msm-kernel-{target}-{variant}"
 
 class Target:
@@ -54,7 +53,7 @@ class Target:
 class BazelBuilder:
     """Helper class for building with Bazel"""
 
-    def __init__(self, target_list, skip_list, out_dir, dry_run, user_opts):
+    def __init__(self, target_list, skip_list, out_dir, dry_run, module, project, variant, user_opts):
         self.workspace = os.path.realpath(
             os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")
         )
@@ -82,7 +81,12 @@ class BazelBuilder:
         else:
             self.out_dir = out_dir
 
+        self.module = module
+        self.project = project
+        self.variant = variant
         self.setup_extensions()
+        self.change_file_permission()
+        self.prepare_sec_env_files()
 
     def __del__(self):
         for proc in self.process_list:
@@ -96,7 +100,6 @@ class BazelBuilder:
         """Set up the extension files if needed"""
         for (ext, def_src) in [
             (MSM_EXTENSIONS, DEFAULT_MSM_EXTENSIONS_SRC),
-            (ABL_EXTENSIONS, DEFAULT_ABL_EXTENSIONS_SRC),
         ]:
             ext_path = os.path.join(self.workspace, ext)
             # If the file doesn't exist or is a dead link, link to the default
@@ -138,15 +141,20 @@ class BazelBuilder:
                     re.compile(r"//{}:{}_{}_{}_dist".format(self.kernel_dir, t, v, s))
                     for s in self.skip_list
                 ]
-                query = 'filter("{}_{}.*_dist$", attr(generator_function, define_msm_platforms, {}/...))'.format(
-                    t, v, self.kernel_dir
-                )
+
+                if self.module:
+                        query = 'filter("{}_{}_{}.*_dist$", attr(generator_function, define_msm_platforms, {}/...))'.format(
+                        t, v, self.module, self.kernel_dir
+                    )
+                else:
+                    query = 'filter("{}_{}.*_dist$", attr(generator_function, define_msm_platforms, {}/...))'.format(
+                        t, v, self.kernel_dir
+                    )
 
             cmdline = [
                 self.bazel_bin,
                 "query",
                 "--ui_event_filters=-info",
-                "--noshow_progress",
                 query,
             ]
 
@@ -197,15 +205,6 @@ class BazelBuilder:
         """Clean generated files from legacy build to avoid conflicts with Bazel"""
         for f in glob.glob("{}/msm-kernel/arch/arm64/configs/vendor/*_defconfig".format(self.workspace)):
             os.remove(f)
-
-        f = os.path.join(self.workspace, "bootable", "bootloader", "edk2", "Conf", ".AutoGenIdFile.txt")
-        if os.path.exists(f):
-            os.remove(f)
-
-        for root, _, files in os.walk(os.path.join(self.workspace, "bootable")):
-            for f in files:
-                if f.endswith(".pyc"):
-                    os.remove(os.path.join(root, f))
 
     def bazel(
         self,
@@ -304,6 +303,60 @@ class BazelBuilder:
         if not self.dry_run:
             self.run_targets(targets_to_build)
 
+    def change_file_permission(self):
+        # NOTE: ES1 Pre-Release - assign u+w attribute to
+        file_permission = {
+            os.path.join(self.workspace, "common", "android", "abi_gki_aarch64_qcom"): stat.S_IREAD | stat.S_IWRITE,
+            os.path.join(self.workspace, "msm-kernel", "modules.vendor_blocklist.msm.*"): stat.S_IREAD | stat.S_IWRITE,
+        }
+
+        for name, permission in file_permission.items():
+            for filename in glob.glob(name):
+                os.chmod(filename, permission)
+
+    def prepare_sec_env_files(self):
+        self.sec_env_keys = {
+            "LOCALVERSION": 1,
+            "TARGET_BUILD_VARIANT": 1,
+            "BUILD_NUMBER": 1,
+            "CL_SYNC": 1,
+            "SEC_FACTORY_BUILD":1,
+            "SEC_BUILD_OPTION_DEBUG_LEVEL": 1,
+            "SEC_BUILD_OPTION_CARRIER_ID": 1,
+            "SEC_BUILD_OPTION_KNOX_CSB": 1,
+            "SEC_BUILD_CONF_MODEL_SIGNING_NAME": 1,
+            "SEC_BUILD_OPTION_EXTRA_BUILD_CONFIG": 1,
+            "PROJECT_REGION": 1,
+            "SEC_QUICKBUILD_ID": 1,
+        }
+        self.write_sec_env_mk_foramt(os.path.join(self.workspace, "common", "scripts", "sec_env.mk"))
+        self.write_sec_env_mk_foramt(os.path.join(self.workspace, "msm-kernel", "scripts", "sec_env.mk"))
+        self.write_sec_env_sh_foramt(os.path.join(self.workspace, "msm-kernel", "build.config.sec_env"))
+
+
+    def write_sec_env_sh_foramt(
+        self,
+        filename
+    ):
+        f = open(filename, 'w')
+        for key, value in os.environ.items():
+            if key in self.sec_env_keys:
+                data = "{}={}\n".format(key, value)
+                f.write(data)
+        f.close()
+
+    def write_sec_env_mk_foramt(
+        self,
+        filename
+    ):
+        f = open(filename, 'w')
+        for key, value in os.environ.items():
+            if key in self.sec_env_keys:
+                data = "{}:={}\n".format(key, value)
+                f.write(data)
+        f.close()
+
+
 def main():
     """Main script entrypoint"""
     parser = argparse.ArgumentParser(description="Build kernel platform with Bazel")
@@ -334,7 +387,7 @@ def main():
     parser.add_argument(
         "--log",
         metavar="LEVEL",
-        default="info",
+        default="debug",
         choices=["debug", "info", "warning", "error"],
         help="Log level (debug, info, warning, error)",
     )
@@ -350,6 +403,25 @@ def main():
         action="store_true",
         help="Perform a dry-run of the build which will perform loading/analysis of build files",
     )
+    parser.add_argument(
+        "-m",
+        "--module",
+        metavar="MODULE",
+        help="Specify the build module (e.g. --module abl will only process the //msm-kernel:<target>_<variant>_abl build)",
+    )
+    parser.add_argument(
+        "-p",
+        "--project",
+        metavar="PROJECT",
+        help="Specify the project fullname (e.g. --project mu3q_usa_singlew)",
+    )
+    parser.add_argument(
+        "-v",
+        "--variant",
+        metavar="VARIANT",
+        default="eng",
+        help="Specify the build variant (e.g. --variant eng)",
+    )
 
     args, user_opts = parser.parse_known_args(sys.argv[1:])
 
@@ -360,7 +432,7 @@ def main():
 
     args.skip.extend(DEFAULT_SKIP_LIST)
 
-    builder = BazelBuilder(args.target, args.skip, args.out_dir, args.dry_run, user_opts)
+    builder = BazelBuilder(args.target, args.skip, args.out_dir, args.dry_run, args.module, args.project, args.variant, user_opts)
     try:
         if args.menuconfig:
             builder.run_menuconfig()
